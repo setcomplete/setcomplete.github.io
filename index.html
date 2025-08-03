@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Magic Set Completer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.6;
+            background: linear-gradient(to right, #8f8ffd 0%, #dfdfff 20%, #dfdfff 80%, #8f8ffd 100%);
+            min-height: 100vh;
+        }
+        .container {
+            background-color: #f9f9f9;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        select, textarea, button {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            background-color: #007cba;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        button:hover {
+            background-color: #005a8b;
+        }
+        button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            font-weight: bold;
+        }
+        .loading {
+            background-color: #fff3cd;
+            color: #856404;
+        }
+        .ready {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .error {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .hidden {
+            display: none;
+        }
+        textarea {
+            height: 200px;
+            font-family: monospace;
+        }
+        .sort-options {
+            margin-bottom: 15px;
+        }
+        .sort-options input[type="radio"] {
+            width: auto;
+            margin-right: 5px;
+        }
+        .sort-options label {
+            display: inline;
+            margin-right: 15px;
+            font-weight: normal;
+        }
+        
+        /* Responsive layout for wide screens */
+        @media (min-width: 900px) {
+            .form-row {
+                display: flex;
+                gap: 20px;
+            }
+            .form-col {
+                flex: 1;
+            }
+            .form-col textarea {
+                height: 300px;
+            }
+        }
+    </style>
+</head>
+<body>
+	<center>
+	<h1>Set Complete</h1>
+    <i>Finding Magic cards like it's 1994</i>
+    <h3><p>	This tool allows you to find which cards you're missing.<br>Choose a Magic: The Gathering set, enter
+		the cards you own, <br> hit the button -- and you're done.</p></h3>
+	</center>
+
+    <div class="container">
+        <div id="status" class="status loading">Please wait... Loading sets from Scryfall.</div>
+        
+        <div id="sort-options" class="sort-options hidden">
+            <label>Sort sets by:</label>
+            <label><input type="radio" name="sort" value="name" checked> Set Name</label>
+            <label><input type="radio" name="sort" value="code"> Set Code</label>
+            <label><input type="radio" name="sort" value="date"> Release Date</label>
+        </div>
+
+        <div id="main-form" class="hidden">
+            <label for="set-select">Select Set:</label>
+            <select id="set-select">
+                <option value="">Choose a set...</option>
+            </select>
+
+            <div class="form-row">
+                <div class="form-col">
+                    <label for="owned-cards">Cards you own (enter one per line):</label>
+                    <textarea id="owned-cards" placeholder="Lightning Bolt&#10;Counterspell&#10;Birds of Paradise&#10;..."></textarea>
+                </div>
+                <div class="form-col">
+                    <label for="missing-cards-preview">Missing cards (will appear here):</label>
+                    <textarea id="missing-cards-preview" readonly placeholder="Results will appear here after you click 'Find Missing Cards'..."></textarea>
+                </div>
+            </div>
+
+            <button id="find-missing" disabled>Find missing cards</button>
+        </div>
+    </div>
+
+    <div id="results-container" class="container hidden">
+        <button id="copy-results" onclick="copyResults()">Copy missing card list to clipboard</button>
+    </div>
+
+    <script>
+        let allSets = [];
+        let currentSetCards = [];
+
+        // Normalize card names for comparison
+        function normalizeCardName(name) {
+            return name
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '') // remove accents
+                .toLowerCase()
+                .replace(/[^a-z0-9\s]/g, '') // keep only letters, numbers, spaces
+                .replace(/\s+/g, ' ') // normalize whitespace
+                .trim();
+        }
+
+        // Load all sets from Scryfall
+        async function loadSets() {
+            try {
+                const response = await fetch('https://api.scryfall.com/sets');
+                const data = await response.json();
+                
+                // Filter to only include sets with cards (exclude tokens, etc.)
+                allSets = data.data.filter(set => set.card_count > 0);
+                
+                populateSetDropdown();
+                updateStatus('ready', 'Ready! Select a set and enter your cards.');
+                
+                document.getElementById('sort-options').classList.remove('hidden');
+                document.getElementById('main-form').classList.remove('hidden');
+                
+            } catch (error) {
+                updateStatus('error', 'Error loading sets. Please refresh the page.');
+                console.error('Error loading sets:', error);
+            }
+        }
+
+        // Update status display
+        function updateStatus(type, message) {
+            const statusEl = document.getElementById('status');
+            statusEl.className = `status ${type}`;
+            statusEl.textContent = message;
+        }
+
+        // Populate the set dropdown
+        function populateSetDropdown() {
+            const select = document.getElementById('set-select');
+            const sortBy = document.querySelector('input[name="sort"]:checked').value;
+            
+            // Sort sets
+            let sortedSets = [...allSets];
+            switch (sortBy) {
+                case 'code':
+                    sortedSets.sort((a, b) => a.code.localeCompare(b.code));
+                    break;
+                case 'date':
+                    sortedSets.sort((a, b) => new Date(b.released_at) - new Date(a.released_at));
+                    break;
+                case 'name':
+                default:
+                    sortedSets.sort((a, b) => a.name.localeCompare(b.name));
+                    break;
+            }
+
+            // Clear existing options (except first)
+            select.innerHTML = '<option value="">Choose a set...</option>';
+            
+            // Add sorted options
+            sortedSets.forEach(set => {
+                const option = document.createElement('option');
+                option.value = set.code;
+                option.textContent = `${set.code.toUpperCase()} - ${set.name}`;
+                select.appendChild(option);
+            });
+        }
+
+        // Load cards for selected set
+        async function loadSetCards(setCode) {
+            try {
+                updateStatus('loading', 'Loading cards from selected set...');
+                
+                const response = await fetch(`https://api.scryfall.com/cards/search?q=set:${setCode}`);
+                const data = await response.json();
+                
+                if (data.object === 'error') {
+                    throw new Error(data.details || 'Set not found');
+                }
+                
+                // Extract just the card names
+                currentSetCards = data.data.map(card => card.name);
+                
+                // Handle pagination if needed
+                let nextPage = data.next_page;
+                while (nextPage) {
+                    const pageResponse = await fetch(nextPage);
+                    const pageData = await pageResponse.json();
+                    currentSetCards.push(...pageData.data.map(card => card.name));
+                    nextPage = pageData.next_page;
+                }
+                
+                updateStatus('ready', `Ready! Loaded ${currentSetCards.length} cards from selected set.`);
+                document.getElementById('find-missing').disabled = false;
+                
+            } catch (error) {
+                updateStatus('error', `Error loading set: ${error.message}`);
+                console.error('Error loading set cards:', error);
+                currentSetCards = [];
+                document.getElementById('find-missing').disabled = true;
+            }
+        }
+
+        // Find missing cards
+        function findMissingCards() {
+            const ownedInput = document.getElementById('owned-cards').value;
+            const setSelect = document.getElementById('set-select');
+            
+            // Validation
+            if (!setSelect.value) {
+                updateStatus('error', 'Please select a set first.');
+                return;
+            }
+            
+            if (!ownedInput.trim()) {
+                updateStatus('error', 'Please enter at least one card you own.');
+                return;
+            }
+            
+            // Parse owned cards
+            const ownedCardNames = ownedInput
+                .split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0);
+            
+            // Normalize owned cards for comparison
+            const normalizedOwned = ownedCardNames.map(normalizeCardName);
+            
+            // Find cards not in owned list
+            const missingCards = [];
+            const notFoundCards = [];
+            
+            // Check each card in the set
+            for (const setCard of currentSetCards) {
+                const normalizedSetCard = normalizeCardName(setCard);
+                if (!normalizedOwned.includes(normalizedSetCard)) {
+                    missingCards.push(setCard);
+                }
+            }
+            
+            // Check for cards user entered that aren't in the set
+            for (const ownedCard of ownedCardNames) {
+                const normalizedOwned = normalizeCardName(ownedCard);
+                const foundInSet = currentSetCards.some(setCard => 
+                    normalizeCardName(setCard) === normalizedOwned
+                );
+                if (!foundInSet) {
+                    notFoundCards.push(ownedCard);
+                }
+            }
+            
+            // Display results
+            displayResults(missingCards, notFoundCards);
+        }
+
+        // Display results
+        function displayResults(missingCards, notFoundCards) {
+            let resultsText = '';
+            
+            // Show warnings FIRST
+            if (notFoundCards.length > 0) {
+                resultsText += `--- WARNING ---\nThese cards you entered were NOT FOUND in the selected set:\n`;
+                resultsText += notFoundCards.join('\n');
+                resultsText += `\n(Check spelling or verify these cards are actually in this set)\n\n`;
+            }
+            
+            if (missingCards.length === 0) {
+                resultsText += 'Congratulations! You have all cards from this set.';
+            } else {
+                resultsText += `Missing ${missingCards.length} cards:\n\n`;
+                resultsText += missingCards.join('\n');
+            }
+            
+            document.getElementById('missing-cards-preview').value = resultsText;
+            document.getElementById('results-container').classList.remove('hidden');
+            
+            updateStatus('ready', `Found ${missingCards.length} missing cards.`);
+        }
+
+        // Copy results to clipboard
+        function copyResults() {
+            const textarea = document.getElementById('missing-cards-preview');
+            textarea.select();
+            document.execCommand('copy');
+            
+            const button = document.getElementById('copy-results');
+            const originalText = button.textContent;
+            button.textContent = 'Copied!';
+            setTimeout(() => {
+                button.textContent = originalText;
+            }, 2000);
+        }
+
+        // Event listeners
+        document.getElementById('set-select').addEventListener('change', function() {
+            if (this.value) {
+                loadSetCards(this.value);
+            } else {
+                currentSetCards = [];
+                document.getElementById('find-missing').disabled = true;
+                document.getElementById('results-container').classList.add('hidden');
+            }
+        });
+
+        document.getElementById('find-missing').addEventListener('click', findMissingCards);
+
+        // Sort option change
+        document.querySelectorAll('input[name="sort"]').forEach(radio => {
+            radio.addEventListener('change', populateSetDropdown);
+        });
+
+        // Load sets when page loads
+        loadSets();
+    </script>
+</body>
+</html>
